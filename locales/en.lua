@@ -1,0 +1,21 @@
+Locales = Locales or {}
+Locales["en"] = {
+    job = "Job",
+    cash = "Cash",
+    bank = "Bank",
+    dob = "Date of Birth",
+    sex = "Sex",
+    male = "Male",
+    female = "Female",
+    play_char = "Start RP",
+    delete_char = "Delete Character",
+    create_char = "Create Character",
+    confirm_title = "Are you sure?",
+    confirm_warning = "Deleting your character will permanently remove all progress (money, cars, houses, etc.)",
+    confirm_label = "Type the character's full name to confirm:",
+    confirm_placeholder = "Enter name here...",
+    cancel = "Cancel",
+    confirm_delete = "Delete permanently",
+    empty_slot = "Empty Slot",
+    locked_slot = "Locked Slot",
+}
