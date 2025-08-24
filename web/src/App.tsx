@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useMemo as useMemo2 } from 'react'
 import icon from './assets/icon.png'
+import Identity from './components/identity'
 
 type JobLike = { label?: string } | string | undefined
 
@@ -54,6 +55,7 @@ function App() {
   const [maxSlot, setMaxSlot] = useState(1)
   const [canDelete, setCanDelete] = useState(false)
   const [selected, setSelected] = useState<number | null>(null)
+
   const [identityOpen, setIdentityOpen] = useState(false)
 
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -194,6 +196,7 @@ function App() {
 
   const handleCreate = useCallback(() => {
     fetchNui('CreateCharacter', {})
+    setIdentityOpen(true)
   }, [])
 
   const handlePlay   = useCallback(() => { if (show) fetchNui('PlayCharacter', {}) }, [show])
@@ -251,76 +254,82 @@ function App() {
         <img src={icon} alt="Logo" />
       </header>
 
-      <main className="cards-row" role="list">
-        {slots.map((idx) => {
-          const ch = characters[idx]
-          const info = getCharDisplay(ch)
-          const isSelected = selected === idx
-          const isLocked = idx > allowedSlot
+      {show && (
+        <>
+          <main className="cards-row" role="list">
+            {slots.map((idx) => {
+              const ch = characters[idx]
+              const info = getCharDisplay(ch)
+              const isSelected = selected === idx
+              const isLocked = idx > allowedSlot
 
-          return (
-            <div
-              key={idx}
-              className={'card' + (isSelected ? ' selected' : '') + (isLocked ? ' locked' : '')}
-              role="listitem"
-              tabIndex={isLocked ? -1 : 0}
-              aria-disabled={isLocked || undefined}
-              onClick={() => { if (!isLocked) { setSelected(idx); if (ch) handleSelect(idx) } }}
-              onKeyDown={(e) => {
-                if (isLocked) return
-                if (e.key === 'Enter') { setSelected(idx); if (ch) handleSelect(idx) }
-              }}
-            >
-              {isLocked ? (
-                <div className="locked-content">
-                  <h3 className="locked-text">{L.locked_slot}</h3>
+              return (
+                <div
+                  key={idx}
+                  className={'card' + (isSelected ? ' selected' : '') + (isLocked ? ' locked' : '')}
+                  role="listitem"
+                  tabIndex={isLocked ? -1 : 0}
+                  aria-disabled={isLocked || undefined}
+                  onClick={() => { if (!isLocked) { setSelected(idx); if (ch) handleSelect(idx) } }}
+                  onKeyDown={(e) => {
+                    if (isLocked) return
+                    if (e.key === 'Enter') { setSelected(idx); if (ch) handleSelect(idx) }
+                  }}
+                >
+                  {isLocked ? (
+                    <div className="locked-content">
+                      <h3 className="locked-text">{L.locked_slot}</h3>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="card-header">
+                        <h3 className="card-title">{info.title}</h3>
+                      </div>
+                      <div className="card-body">
+                        <div className="row"><span className="label">{L.job}:</span><span className="value">{info.job || '—'}</span></div>
+                        <div className="row"><span className="label">{L.cash}:</span><span className="value">{formatDKK(info.cash)}</span></div>
+                        <div className="row"><span className="label">{L.bank}:</span><span className="value">{formatDKK(info.bank)}</span></div>
+                        <div className="row"><span className="label">{L.dob}:</span><span className="value">{info.dob || '—'}</span></div>
+                        <div className="row"><span className="label">{L.sex}:</span><span className="value">{info.sex || '—'}</span></div>
+                        <div className="row"></div>
+                      </div>
+                      <div className={'slot-badge' + (isSelected ? ' red' : '')}><p>{idx}</p></div>
+                    </>
+                  )}
                 </div>
+              )
+            })}
+          </main>
+
+          <div className="actions">
+            {selected == null ? null
+              : (selected > allowedSlot) ? null
+              : !characters[selected] ? (
+                <button className="btn primary" onClick={handleCreate}>Opret karakter</button>
               ) : (
                 <>
-                  <div className="card-header">
-                    <h3 className="card-title">{info.title}</h3>
-                  </div>
-                  <div className="card-body">
-                    <div className="row"><span className="label">{L.job}:</span><span className="value">{info.job || '—'}</span></div>
-                    <div className="row"><span className="label">{L.cash}:</span><span className="value">{formatDKK(info.cash)}</span></div>
-                    <div className="row"><span className="label">{L.bank}:</span><span className="value">{formatDKK(info.bank)}</span></div>
-                    <div className="row"><span className="label">{L.dob}:</span><span className="value">{info.dob || '—'}</span></div>
-                    <div className="row"><span className="label">{L.sex}:</span><span className="value">{info.sex || '—'}</span></div>
-                    <div className="row"></div>
-                  </div>
-                  <div className={'slot-badge' + (isSelected ? ' red' : '')}><p>{idx}</p></div>
+                  <button className="btn primary" onClick={handlePlay}>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-circle-play">
+                      <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"/>
+                      <circle cx="12" cy="12" r="10"/>
+                    </svg>
+                    {L.play_char}
+                  </button>
+
+                  <button className="btn danger" onClick={requestDelete}>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-trash-2">
+                      <path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                    {L.delete_char}
+                  </button>
                 </>
-              )}
-            </div>
-          )
-        })}
-      </main>
+              )
+            }
+          </div>
+        </>
+      )}
 
-      <div className="actions">
-        {selected == null ? null
-          : (selected > allowedSlot) ? null
-          : !characters[selected] ? (
-            <button className="btn primary" onClick={handleCreate}>Opret karakter</button>
-          ) : (
-            <>
-              <button className="btn primary" onClick={handlePlay}>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-circle-play">
-                  <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"/>
-                  <circle cx="12" cy="12" r="10"/>
-                </svg>
-                {L.play_char}
-              </button>
-
-              <button className="btn danger" onClick={requestDelete}>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-trash-2">
-                  <path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                </svg>
-                {L.delete_char}
-              </button>
-            </>
-          )
-        }
-      </div>
+      <Identity open={identityOpen} onClose={() => setIdentityOpen(false)} />
 
       {confirmOpen && (
         <>

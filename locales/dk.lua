@@ -18,4 +18,6 @@ Locales["dk"] = {
     confirm_delete = "Slet permanent",
     empty_slot = "Tom plads",
     locked_slot = "Låst plads",
+
+    thank_you_for_registering = "Tak fordi du registrerede dig!"
 }

@@ -18,4 +18,6 @@ Locales["en"] = {
     confirm_delete = "Delete permanently",
     empty_slot = "Empty Slot",
     locked_slot = "Locked Slot",
+    
+    thank_you_for_registering = "Thank you for registering!"
 }

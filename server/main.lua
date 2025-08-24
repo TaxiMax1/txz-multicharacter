@@ -1,16 +1,13 @@
 local ESX = exports["es_extended"]:getSharedObject()
-
 local Server = {
   oneSync = GetConvar("onesync", "off"),
   slots = Config.Slots or 4,
   prefix = Config.Prefix or "char",
-  identifierType = (ESX.GetConfig().Identifier) or (GetConvar("sv_lan", "") == "true" and "ip" or "license"),
+  identifierType = ESX.GetConfig("Identifier") or (GetConvar("sv_lan", "") == "true" and "ip" or "license"),
 }
 Server.__index = Server
 
 ESX.Players = ESX.Players or {}
-
--- ============== HELPERS ==============
 
 local function split(str, sep)
   local out, patt = {}, ("([^%s]+)"):format(sep:gsub("%W","%%%0"))
@@ -31,8 +28,6 @@ end
 
 local function routeToOwnBucket(src) SetPlayerRoutingBucket(src, src) end
 local function routeToPublic(src)    SetPlayerRoutingBucket(src, 0)   end
-
--- ============== DATABASE ==============
 
 local Database = {
   connected = false,
@@ -67,8 +62,6 @@ function Database:GetConnectionInfo()
   end
 end
 
-Database:GetConnectionInfo()
-
 function Database:EnsureSchema()
   local ok1 = MySQL.transaction.await({
     { query = [[
@@ -91,6 +84,8 @@ function Database:EnsureSchema()
     if not ok2 then error("^1Failed adding `users.disabled` column^0") end
   end
 end
+
+Database:GetConnectionInfo()
 
 MySQL.ready(function()
   if not Database.name then
@@ -139,6 +134,75 @@ MySQL.ready(function()
   end
 end)
 
+function Database:GetConnectionInfo()
+  local conn = GetConvar("mysql_connection_string", "")
+  if conn == "" then
+    error("^1Unable to start Multicharacter - mysql_connection_string is empty^0", 0)
+  end
+
+  if conn:find("^mysql://") then
+    local uri = conn:sub(9)
+    local slash = uri:find("/")
+    if slash then
+      local tail = uri:sub(slash + 1)
+      self.name = tail:gsub("[%?]+[%w%p]*$", "")
+      self.found = self.name ~= nil
+    end
+  else
+    for _, pair in ipairs(split(conn, ";")) do
+      local k, v = pair:match("^%s*(.-)%s*=%s*(.-)%s*$")
+      if k and v and k:lower() == "database" then
+        self.name  = v
+        self.found = true
+        break
+      end
+    end
+  end
+end
+
+Database:GetConnectionInfo()
+
+MySQL.ready(function()
+  local desiredLen = 42 + #Server.prefix
+
+  local rows = MySQL.query.await((
+    'SELECT TABLE_NAME, COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH ' ..
+    'FROM INFORMATION_SCHEMA.COLUMNS ' ..
+    'WHERE TABLE_SCHEMA = ? AND DATA_TYPE = "varchar" AND COLUMN_NAME IN (?)'
+  ), { Database.name, { "identifier", "owner" } }) or {}
+
+  local toAlter, alterCount = {}, 0
+  for _, col in ipairs(rows) do
+    Database.tables[col.TABLE_NAME] = col.COLUMN_NAME
+    local maxLen = tonumber(col.CHARACTER_MAXIMUM_LENGTH or 0) or 0
+    if maxLen > 0 and maxLen < desiredLen then
+      toAlter[#toAlter+1] = { tableName = col.TABLE_NAME, column = col.COLUMN_NAME }
+      alterCount = alterCount + 1
+    end
+  end
+
+  if alterCount > 0 then
+    local queries = {}
+    for _, it in ipairs(toAlter) do
+      queries[#queries+1] = {
+        query = ("ALTER TABLE `%s` MODIFY COLUMN `%s` VARCHAR(%d)"):format(it.tableName, it.column, desiredLen)
+      }
+    end
+    local ok = MySQL.transaction.await(queries)
+    if not ok then
+      print(("[^2INFO^7] Unable to update ^5%s^7 columns to ^5VARCHAR(%s)^7"):format(alterCount, desiredLen))
+    end
+  end
+
+  Database.connected = true
+
+  ESX.Jobs = ESX.GetJobs()
+  while not next(ESX.Jobs) do
+    Wait(500)
+    ESX.Jobs = ESX.GetJobs()
+  end
+end)
+
 function Database:DeleteCharacter(src, charid)
   local identifier = ("%s%s:%s"):format(Server.prefix, charid, ESX.GetIdentifier(src))
   local queries, i = {}, 0
@@ -152,9 +216,6 @@ function Database:DeleteCharacter(src, charid)
     error("\n^1Transaction failed while trying to delete " .. identifier .. "^0")
     return
   end
-
-  Wait(50)
-  Multicharacter:SetupCharacters(src)
 end
 
 function Database:GetPlayerSlots(id)
@@ -187,16 +248,14 @@ function Database:RemoveSlots(identifier)
 end
 
 function Database:EnableSlot(identifier, slot)
-  local charId = ("%s%s:%s"):format(Server.prefix, slot, identifier)
+  local charId = ("char%s:%s"):format(slot, identifier)
   return (MySQL.update.await("UPDATE `users` SET `disabled` = 0 WHERE identifier = ?", { charId }) or 0) > 0
 end
 
 function Database:DisableSlot(identifier, slot)
-  local charId = ("%s%s:%s"):format(Server.prefix, slot, identifier)
+  local charId = ("char%s:%s"):format(slot, identifier)
   return (MySQL.update.await("UPDATE `users` SET `disabled` = 1 WHERE identifier = ?", { charId }) or 0) > 0
 end
-
--- ============== MULTICHARACTER (SERVER SIDE) ==============
 
 local Multicharacter = {
   awaitingRegistration = {},
@@ -205,15 +264,16 @@ Multicharacter.__index = Multicharacter
 
 function Multicharacter:SetupCharacters(src)
   routeToOwnBucket(src)
+
   while not Database.connected do Wait(100) end
 
   local baseId = ESX.GetIdentifier(src)
   ESX.Players[baseId] = src
 
   local slotInfo = normalizeSlots(Database:GetPlayerSlots(baseId))
-  local likeId   = (Server.prefix or "char") .. "%:" .. baseId
-  local limit    = tonumber(slotInfo.max) or 1
-  local rows     = Database:GetPlayerInfo(likeId, limit) or {}
+  local likeId = (Server.prefix or "char") .. "%:" .. baseId
+  local limit = tonumber(slotInfo.max) or 1
+  local rows = Database:GetPlayerInfo(likeId, limit) or {}
   local characters = {}
 
   for _, v in ipairs(rows) do
@@ -252,7 +312,7 @@ function Multicharacter:SetupCharacters(src)
     end
   end
 
-  TriggerClientEvent("txz-multicharacter:SetupUI", src, characters, slotInfo.default, slotInfo.max)
+  TriggerClientEvent("txz-multicharcater:SetupUI", src, characters, slotInfo.default, slotInfo.max)
 end
 
 function Multicharacter:CharacterChosen(src, charid, isNew)
@@ -293,8 +353,6 @@ function Multicharacter:PlayerDropped(src)
   ESX.Players[ESX.GetIdentifier(src)] = nil
 end
 
--- ============== SERVER BOOT / CONNECTION DEFERRALS ==============
-
 function Server:ResetPlayers()
   if next(ESX.Players) then
     local snapshot = table.clone(ESX.Players)
@@ -327,9 +385,25 @@ function Server:OnConnecting(src, deferrals)
     return deferrals.done("[ESX Multicharacter] OxMySQL could not connect. Check your configuration.")
   end
 
+  if not SetEntityOrphanMode then
+    return deferrals.done(_U('err_artifact'))
+  end
+
+  if self.oneSync == "off" or self.oneSync == "legacy" then
+      return deferrals.done(_U('err_onesync', self.oneSync))
+  end
+
+   if not Database.found then
+      return deferrals.done(_U('err_no_connstr'))
+  end
+
+   if not Database.connected then
+      return deferrals.done(_U('err_oxmysql'))
+  end
+
   local ok, identifier = pcall(function() return ESX.GetIdentifier(src) end)
   if not ok or not identifier then
-      return deferrals.done(("[ESX Multicharacter] Could not get your identifier (%s)"):format(Server.identifierType))
+      return deferrals.done(_U('err_identifier', self.identifierType))
   end
 
   if ESX.GetConfig().EnableDebug or not ESX.Players[identifier] then
@@ -375,13 +449,11 @@ AddEventHandler("playerConnecting", function(_, _, deferrals)
   Server:OnConnecting(source, deferrals)
 end)
 
--- ============== EVENTS ==============
-
-RegisterNetEvent("txz-multicharacter:SetupCharacters", function()
+RegisterNetEvent("txz-multicharcater:SetupCharacters", function()
   Multicharacter:SetupCharacters(source)
 end)
 
-RegisterNetEvent("txz-multicharacter:CharacterChosen", function(charid, isNew)
+RegisterNetEvent("txz-multicharcater:CharacterChosen", function(charid, isNew)
   Multicharacter:CharacterChosen(source, charid, isNew)
 end)
 
@@ -393,13 +465,13 @@ AddEventHandler("playerDropped", function()
   Multicharacter:PlayerDropped(source)
 end)
 
-RegisterNetEvent("txz-multicharacter:DeleteCharacter", function(charid)
+RegisterNetEvent("txz-multicharcater:DeleteCharacter", function(charid)
   if not Config.CanDelete then return end
   if type(charid) ~= "number" or #tostring(charid) > 2 then return end
   Database:DeleteCharacter(source, charid)
 end)
 
-RegisterNetEvent("txz-multicharacter:relog", function()
+RegisterNetEvent("txz-multicharcater:relog", function()
     local src = source
     local xPlayer = ESX.GetPlayerFromId(src)
     if not xPlayer then return end
@@ -415,5 +487,15 @@ RegisterNetEvent("txz-multicharacter:relog", function()
 
     TriggerEvent("esx:playerLogout", src)
 end)
+
+function Database:EnableSlot(identifier, slot)
+  local selected = ("char%s:%s"):format(slot, identifier)
+  return (MySQL.update.await("UPDATE `users` SET `disabled` = 0 WHERE identifier = ?", { selected }) or 0) > 0
+end
+
+function Database:DisableSlot(identifier, slot)
+  local selected = ("char%s:%s"):format(slot, identifier)
+  return (MySQL.update.await("UPDATE `users` SET `disabled` = 1 WHERE identifier = ?", { selected }) or 0) > 0
+end
 
 Server:ResetPlayers()
