@@ -2,51 +2,20 @@ import { useEffect, useMemo, useState, useCallback, useMemo as useMemo2 } from '
 import icon from './assets/icon.png'
 import Identity from './components/identity'
 
-type JobLike = { label?: string } | string | undefined
-
-interface Character {
-  name?: string
-  firstname?: string
-  lastname?: string
-  identifier?: string
-  jobLabel?: string
-  job?: JobLike
-  employed?: boolean
-  skin?: any
-  model?: any
-  sex?: string | number
-  bank?: number
-  money?: number
-  dateofbirth?: string
-}
-
-type CharactersMap = Record<number, Character>
-
-function fetchNui<T = unknown>(eventName: string, data: unknown = {}): Promise<T | void> {
-  const anyWin = window as any
-  const hasPRN = typeof anyWin.GetParentResourceName === 'function'
-  const resourceName = hasPRN ? anyWin.GetParentResourceName() : 'dev-resource'
-
-  if (!hasPRN) {
-    return Promise.resolve()
-  }
-
-  return fetch(`https://${resourceName}/${eventName}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=UTF-8' },
-    body: JSON.stringify(data),
-  })
-    .then(async (r) => {
-      try { return (await r.json()) as T } catch { return }
-    })
-    .catch((err) => console.debug('[NUI ERROR]', eventName, err?.message))
-}
-
-const formatDKK = (n: number | undefined) =>
-  (n ?? 0).toLocaleString('da-DK') + ' kr.'
-
-const sexText = (sex: Character['sex']) =>
-  (sex === 'f' || sex === 'female' || sex === 1) ? 'Kvinde' : 'Mand'
+import {
+  type Character,
+  type CharactersMap,
+  fetchNui,
+  formatDKK,
+  getCharDisplay,
+  normalizeCharacters,
+  computeSlotBounds,
+  slotsArray,
+  expectedCharacterName,
+  isLocked,
+  hasParentResource,
+  devPostMockToggle,
+} from './components/utils'
 
 function App() {
   const [show, setShow] = useState(false)
@@ -83,7 +52,7 @@ function App() {
 
   useEffect(() => {
     fetchNui('nuiReady', {})
-    fetchNui('ready', {}).catch(() => {}) 
+    fetchNui('ready', {}).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -95,29 +64,10 @@ function App() {
     return () => window.removeEventListener('message', onMsg as EventListener)
   }, [])
 
+  // Dev mock when running outside FiveM
   useEffect(() => {
-    const anyWin = window as any
-    if (typeof anyWin.GetParentResourceName === 'function') return
-    const mock = {
-      action: 'ToggleMulticharacter',
-      data: {
-        show: true,
-        CanDelete: true,
-        AllowedSlot: 2,
-        MaxSlot: 4,
-        Characters: {
-          1: {
-            name: 'Video Video',
-            jobLabel: 'Arbejdsløs - Kontanthjælp',
-            money: 0,
-            bank: 491_014,
-            dateofbirth: '10/01/1950',
-            sex: 'm',
-          },
-        },
-      },
-    }
-    const t = setTimeout(() => window.postMessage(mock, '*'), 120)
+    if (hasParentResource()) return
+    const t = setTimeout(() => devPostMockToggle(), 120)
     return () => clearTimeout(t)
   }, [])
 
@@ -133,61 +83,26 @@ function App() {
 
       if (action !== 'ToggleMulticharacter' || !data) return
 
-      const raw = data.Characters ?? {}
-      const normalized: Record<number, Character> = {}
-      if (Array.isArray(raw)) {
-        raw.forEach((item, i) => normalized[Number(item?.slot ?? i + 1)] = item)
-      } else if (typeof raw === 'object') {
-        Object.keys(raw).forEach(k => {
-          const n = Number(k); if (!Number.isNaN(n)) normalized[n] = raw[k]
-        })
-      }
-
-      const keys = Object.keys(normalized).map(Number).sort((a,b)=>a-b)
-      const maxCharSlot = keys.length ? keys[keys.length - 1] : 0
-      const providedAllowed = Number(data.AllowedSlot ?? 1)
-      const providedMax = Number(data.MaxSlot ?? providedAllowed)
-      const effectiveAllowed = Math.max(providedAllowed, maxCharSlot)
+      const normalized = normalizeCharacters(data.Characters ?? {})
+      const { keys, allowed, maxSlot, first } = computeSlotBounds(
+        normalized,
+        Number(data.AllowedSlot ?? 1),
+        Number(data.MaxSlot ?? data.AllowedSlot ?? 1),
+      )
 
       setShow(!!data.show)
       setCharacters(normalized)
       setCanDelete(!!data.CanDelete)
-      setAllowedSlot(effectiveAllowed)
-      setMaxSlot(Math.max(providedMax, effectiveAllowed))
-
-      const first = keys[0]
-      setSelected(typeof first === 'number' ? first : 1)
+      setAllowedSlot(allowed)
+      setMaxSlot(maxSlot)
+      setSelected(typeof keys[0] === 'number' ? first : 1)
     }
 
     window.addEventListener('message', handler as EventListener)
     return () => window.removeEventListener('message', handler as EventListener)
   }, [])
 
-  const slots = useMemo(() => Array.from({ length: Math.max(maxSlot, 0) }, (_, i) => i + 1), [maxSlot])
-
-  const getCharDisplay = useCallback((ch?: Character) => {
-    if (!ch) return { title: 'Tom plads', job: '', dob: '', cash: 0, bank: 0, sex: '' }
-    const title = ch.name || [ch.firstname, ch.lastname].filter(Boolean).join(' ') || ch.identifier || 'Ukendt'
-    
-    let jobStr = ''
-    if (typeof ch.job === 'string') {
-      jobStr = ch.job
-    } else if (ch.job && (ch.job as any).label) {
-      jobStr = (ch.job as any).label
-    }
-
-    const jobLabel = ch.jobLabel || (ch.employed === false ? 'Arbejdsløs' : '')
-    const combinedJob = [jobStr, jobLabel].filter(Boolean).join(' - ')
-
-    return {
-      title,
-      job: combinedJob || '',
-      dob: ch.dateofbirth || '',
-      cash: ch.money ?? 0,
-      bank: ch.bank ?? 0,
-      sex: sexText(ch.sex),
-    }
-  }, [])
+  const slots = useMemo(() => slotsArray(maxSlot), [maxSlot])
 
   const handleSelect = useCallback((idx: number) => {
     setSelected(idx)
@@ -199,7 +114,7 @@ function App() {
     setIdentityOpen(true)
   }, [])
 
-  const handlePlay   = useCallback(() => { if (show) fetchNui('PlayCharacter', {}) }, [show])
+  const handlePlay = useCallback(() => { if (show) fetchNui('PlayCharacter', {}) }, [show])
 
   const requestDelete = useCallback(() => {
     if (!show || !canDelete) return
@@ -216,9 +131,7 @@ function App() {
 
   const expectedName = useMemo2(() => {
     if (selected == null) return ''
-    const ch = characters[selected]
-    if (!ch) return ''
-    return ch.name || [ch.firstname, ch.lastname].filter(Boolean).join(' ') || ch.identifier || ''
+    return expectedCharacterName(characters[selected])
   }, [selected, characters])
 
   const confirmEnabled = expectedName.trim().length > 0
@@ -261,22 +174,22 @@ function App() {
               const ch = characters[idx]
               const info = getCharDisplay(ch)
               const isSelected = selected === idx
-              const isLocked = idx > allowedSlot
+              const locked = isLocked(idx, allowedSlot)
 
               return (
                 <div
                   key={idx}
-                  className={'card' + (isSelected ? ' selected' : '') + (isLocked ? ' locked' : '')}
+                  className={'card' + (isSelected ? ' selected' : '') + (locked ? ' locked' : '')}
                   role="listitem"
-                  tabIndex={isLocked ? -1 : 0}
-                  aria-disabled={isLocked || undefined}
-                  onClick={() => { if (!isLocked) { setSelected(idx); if (ch) handleSelect(idx) } }}
+                  tabIndex={locked ? -1 : 0}
+                  aria-disabled={locked || undefined}
+                  onClick={() => { if (!locked) { setSelected(idx); if (ch) handleSelect(idx) } }}
                   onKeyDown={(e) => {
-                    if (isLocked) return
+                    if (locked) return
                     if (e.key === 'Enter') { setSelected(idx); if (ch) handleSelect(idx) }
                   }}
                 >
-                  {isLocked ? (
+                  {locked ? (
                     <div className="locked-content">
                       <h3 className="locked-text">{L.locked_slot}</h3>
                     </div>
@@ -303,7 +216,7 @@ function App() {
 
           <div className="actions">
             {selected == null ? null
-              : (selected > allowedSlot) ? null
+              : isLocked(selected, allowedSlot) ? null
               : !characters[selected] ? (
                 <button className="btn primary" onClick={handleCreate}>Opret karakter</button>
               ) : (
