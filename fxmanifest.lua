@@ -29,6 +29,6 @@ files {
 }
 
 escrow_ignore {
-    'config.lua',
-    'server/commands.lua',
+    'shared/config.lua',
+    'shared/exports.lua',
 }
