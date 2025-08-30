@@ -6,7 +6,7 @@ Config.Cam = vec4(-1180.1158, -1893.6410, 972.2230, 13.4359)
 Config.PlayerSpawn = vec4(-268.4914, -957.0355, 31.2232, 202.8438)
 Config.Relog = { enabled = true, command = 'relog', groups = { "admin", "superadmin" } }
 Config.Slots = { default = 3, max = 4 }
-Config.ClothingMenu = 'pure-clothing' -- ['fivem-appearance', 'illenium-appearance', 'rcore-clothing', 'pure-clothing']
+Config.ClothingMenu = 'pure-clothing' -- ['fivem-appearance', 'illenium-appearance', 'rcore-clothing', 'pure-clothing'] | To add more line - [179 - client/main.lua]
 
 -- Identity
 Config.DateFormat = "DD/MM/YYYY"

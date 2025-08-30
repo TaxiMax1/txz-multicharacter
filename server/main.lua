@@ -1,4 +1,3 @@
--- server.lua
 local ESX = exports["es_extended"]:getSharedObject()
 
 local Server = {

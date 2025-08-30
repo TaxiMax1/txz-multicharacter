@@ -1,4 +1,3 @@
--- client.lua
 ESX = exports["es_extended"]:getSharedObject()
 local nuiReady = false
 
@@ -47,7 +46,6 @@ RegisterNuiCallback('nuiReady', function(_, cb)
     cb(1)
 end)
 
--- NEW: let UI request creating a character in a specific (or first free) slot
 RegisterNuiCallback('createCharacter', function(data, cb)
     local desired = data and data.slot
     Menu:NewCharacter(desired)
@@ -421,7 +419,6 @@ function Multicharacter:SetupCharacter(index)
     self:PrepForUI()
 end
 
--- helpers to manage free slots (NEW/UPDATED)
 local function IsSlotFree(idx)
     return not Multicharacter.Characters or not Multicharacter.Characters[idx]
 end
@@ -447,9 +444,6 @@ function Multicharacter:SetupUI(characters, allowed, max)
     end
 
     SendNUIMessage({ action = "Locales", data = GetUILocales() })
-
-    -- IMPORTANT: Do NOT jump to identity when there are no characters.
-    -- Always open the multicharacter UI so the user can pick a slot.
     Menu:InitCharacter()
 end
 
@@ -501,12 +495,10 @@ end
 function Menu:NewCharacter(slotChoice)
     local slot = GetSlot(slotChoice)
     if not slot then
-        -- No free slot; just close UI (should not happen when AllowedSlot is correct)
         Multicharacter:CloseUI()
         return
     end
 
-    -- Mark the chosen slot for registration and open identity UI
     TriggerServerEvent("txz-multicharcater:CharacterChosen", slot, true)
     TriggerEvent("esx_identity:showRegisterIdentity")
 
@@ -520,7 +512,6 @@ function Menu:InitCharacter()
     local Characters = Multicharacter.Characters or {}
     local firstKey = next(Characters)
 
-    -- Only prepare a preview ped if at least one character exists.
     if firstKey then
         self:CheckModel(Characters[firstKey])
         if not Multicharacter.spawned then
