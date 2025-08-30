@@ -10,7 +10,7 @@ Config.ClothingMenu = 'pure-clothing' -- ['fivem-appearance', 'illenium-appearan
 
 -- Identity
 Config.DateFormat = "DD/MM/YYYY"
-Config.MaxNameLength = 20 -- Max Name Length.
-Config.MinHeight = 120 -- 120 cm lowest height
-Config.MaxHeight = 220 -- 220 cm max height.
-Config.MaxAge = 100 -- 100 years old is the oldest you can be.
+Config.MaxNameLength = 20
+Config.MinHeight = 120
+Config.MaxHeight = 220
+Config.MaxAge = 100

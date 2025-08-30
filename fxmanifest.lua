@@ -7,8 +7,9 @@ discord 'https://discord.gg/GhKgp6yWtJ'
 
 shared_scripts { 
   '@ox_lib/init.lua',
+  'shared/config.lua',
   'locales/*.lua',
-  'shared/*.lua',
+  'shared/locale.lua',
 }
 
 server_scripts {
@@ -28,7 +29,6 @@ files {
 }
 
 escrow_ignore {
-  'config.lua',
+  'shared/config.lua',
   'shared/exports.lua',
-  'locales/*.lua',
 }

@@ -1,4 +1,6 @@
+-- server.lua
 local ESX = exports["es_extended"]:getSharedObject()
+
 local Server = {
   oneSync = GetConvar("onesync", "off"),
   slots = Config.Slots or 4,
@@ -39,9 +41,8 @@ Database.__index = Database
 
 function Database:GetConnectionInfo()
   local conn = GetConvar("mysql_connection_string", "")
-  if conn == "" then
-    error("^1Unable to start Multicharacter - mysql_connection_string is empty^0", 0)
-  end
+  if conn == "" then error("^1Unable to start Multicharacter - mysql_connection_string is empty^0", 0) end
+
   if conn:find("^mysql://") then
     local uri = conn:sub(9)
     local slash = uri:find("/")
@@ -62,7 +63,9 @@ function Database:GetConnectionInfo()
   end
 end
 
-function Database:EnsureSchema()
+Database:GetConnectionInfo()
+
+local function ensureSchema()
   local ok1 = MySQL.transaction.await({
     { query = [[
       CREATE TABLE IF NOT EXISTS `multicharacter_slots` (
@@ -78,22 +81,14 @@ function Database:EnsureSchema()
   local hasDisabled = MySQL.scalar.await([[
     SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'disabled'
-  ]], { self.name })
+  ]], { Database.name })
   if tonumber(hasDisabled or 0) == 0 then
     local ok2 = MySQL.update.await([[ALTER TABLE `users` ADD COLUMN `disabled` TINYINT(1) NOT NULL DEFAULT 0]])
     if not ok2 then error("^1Failed adding `users.disabled` column^0") end
   end
 end
 
-Database:GetConnectionInfo()
-
-MySQL.ready(function()
-  if not Database.name then
-    error("^1Database name is unknown — check mysql_connection_string^0")
-  end
-
-  Database:EnsureSchema()
-
+local function ensureIdentifierWidths()
   local desiredLen = 42 + #Server.prefix
   local rows = MySQL.query.await(
     'SELECT TABLE_NAME, COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH ' ..
@@ -102,98 +97,31 @@ MySQL.ready(function()
     { Database.name, { "identifier", "owner" } }
   ) or {}
 
-  local toAlter, alterCount = {}, 0
+  local toAlter = {}
   for _, col in ipairs(rows) do
     Database.tables[col.TABLE_NAME] = col.COLUMN_NAME
     local maxLen = tonumber(col.CHARACTER_MAXIMUM_LENGTH or 0) or 0
     if maxLen > 0 and maxLen < desiredLen then
       toAlter[#toAlter+1] = { tableName = col.TABLE_NAME, column = col.COLUMN_NAME }
-      alterCount = alterCount + 1
     end
   end
 
-  if alterCount > 0 then
+  if #toAlter > 0 then
     local queries = {}
     for _, it in ipairs(toAlter) do
-      queries[#queries+1] = {
-        query = ("ALTER TABLE `%s` MODIFY COLUMN `%s` VARCHAR(%d)"):format(it.tableName, it.column, desiredLen)
-      }
+      queries[#queries+1] = { query = ("ALTER TABLE `%s` MODIFY COLUMN `%s` VARCHAR(%d)"):format(it.tableName, it.column, desiredLen) }
     end
     local ok = MySQL.transaction.await(queries)
     if not ok then
-      print(("[^2INFO^7] Unable to update ^5%s^7 columns to ^5VARCHAR(%s)^7"):format(alterCount, desiredLen))
-    end
-  end
-
-  Database.connected = true
-
-  ESX.Jobs = ESX.GetJobs()
-  while not next(ESX.Jobs) do
-    Wait(500)
-    ESX.Jobs = ESX.GetJobs()
-  end
-end)
-
-function Database:GetConnectionInfo()
-  local conn = GetConvar("mysql_connection_string", "")
-  if conn == "" then
-    error("^1Unable to start Multicharacter - mysql_connection_string is empty^0", 0)
-  end
-
-  if conn:find("^mysql://") then
-    local uri = conn:sub(9)
-    local slash = uri:find("/")
-    if slash then
-      local tail = uri:sub(slash + 1)
-      self.name = tail:gsub("[%?]+[%w%p]*$", "")
-      self.found = self.name ~= nil
-    end
-  else
-    for _, pair in ipairs(split(conn, ";")) do
-      local k, v = pair:match("^%s*(.-)%s*=%s*(.-)%s*$")
-      if k and v and k:lower() == "database" then
-        self.name  = v
-        self.found = true
-        break
-      end
+      print(("[^2INFO^7] Unable to update ^5%s^7 columns to ^5VARCHAR(%s)^7"):format(#toAlter, desiredLen))
     end
   end
 end
 
-Database:GetConnectionInfo()
-
 MySQL.ready(function()
-  local desiredLen = 42 + #Server.prefix
-
-  local rows = MySQL.query.await((
-    'SELECT TABLE_NAME, COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH ' ..
-    'FROM INFORMATION_SCHEMA.COLUMNS ' ..
-    'WHERE TABLE_SCHEMA = ? AND DATA_TYPE = "varchar" AND COLUMN_NAME IN (?)'
-  ), { Database.name, { "identifier", "owner" } }) or {}
-
-  local toAlter, alterCount = {}, 0
-  for _, col in ipairs(rows) do
-    Database.tables[col.TABLE_NAME] = col.COLUMN_NAME
-    local maxLen = tonumber(col.CHARACTER_MAXIMUM_LENGTH or 0) or 0
-    if maxLen > 0 and maxLen < desiredLen then
-      toAlter[#toAlter+1] = { tableName = col.TABLE_NAME, column = col.COLUMN_NAME }
-      alterCount = alterCount + 1
-    end
-  end
-
-  if alterCount > 0 then
-    local queries = {}
-    for _, it in ipairs(toAlter) do
-      queries[#queries+1] = {
-        query = ("ALTER TABLE `%s` MODIFY COLUMN `%s` VARCHAR(%d)"):format(it.tableName, it.column, desiredLen)
-      }
-    end
-    local ok = MySQL.transaction.await(queries)
-    if not ok then
-      print(("[^2INFO^7] Unable to update ^5%s^7 columns to ^5VARCHAR(%s)^7"):format(alterCount, desiredLen))
-    end
-  end
-
+  if not Database.name then error("^1Database name is unknown — check mysql_connection_string^0") end
+  ensureSchema()
+  ensureIdentifierWidths()
   Database.connected = true
 
   ESX.Jobs = ESX.GetJobs()
@@ -210,12 +138,8 @@ function Database:DeleteCharacter(src, charid)
     i = i + 1
     queries[i] = { query = ("DELETE FROM `%s` WHERE %s = ?"):format(tbl, col), values = { identifier } }
   end
-
   local ok = MySQL.transaction.await(queries)
-  if not ok then
-    error("\n^1Transaction failed while trying to delete " .. identifier .. "^0")
-    return
-  end
+  if not ok then error("\n^1Transaction failed while trying to delete " .. identifier .. "^0") end
 end
 
 function Database:GetPlayerSlots(id)
@@ -248,23 +172,20 @@ function Database:RemoveSlots(identifier)
 end
 
 function Database:EnableSlot(identifier, slot)
-  local charId = ("char%s:%s"):format(slot, identifier)
-  return (MySQL.update.await("UPDATE `users` SET `disabled` = 0 WHERE identifier = ?", { charId }) or 0) > 0
+  local selected = ("char%s:%s"):format(slot, identifier)
+  return (MySQL.update.await("UPDATE `users` SET `disabled` = 0 WHERE identifier = ?", { selected }) or 0) > 0
 end
 
 function Database:DisableSlot(identifier, slot)
-  local charId = ("char%s:%s"):format(slot, identifier)
-  return (MySQL.update.await("UPDATE `users` SET `disabled` = 1 WHERE identifier = ?", { charId }) or 0) > 0
+  local selected = ("char%s:%s"):format(slot, identifier)
+  return (MySQL.update.await("UPDATE `users` SET `disabled` = 1 WHERE identifier = ?", { selected }) or 0) > 0
 end
 
-local Multicharacter = {
-  awaitingRegistration = {},
-}
+local Multicharacter = { awaitingRegistration = {} }
 Multicharacter.__index = Multicharacter
 
 function Multicharacter:SetupCharacters(src)
   routeToOwnBucket(src)
-
   while not Database.connected do Wait(100) end
 
   local baseId = ESX.GetIdentifier(src)
@@ -279,13 +200,10 @@ function Multicharacter:SetupCharacters(src)
   for _, v in ipairs(rows) do
     local jobName = v.job or "unemployed"
     local gradeKey = tostring(v.job_grade)
-    local gradeLbl = ""
-    local jobLabel = jobName
+    local gradeLbl, jobLabel = "", jobName
 
     if ESX.Jobs[jobName] and ESX.Jobs[jobName].grades[gradeKey] then
-      if jobName ~= "unemployed" then
-        gradeLbl = ESX.Jobs[jobName].grades[gradeKey].label
-      end
+      if jobName ~= "unemployed" then gradeLbl = ESX.Jobs[jobName].grades[gradeKey].label end
       jobLabel = ESX.Jobs[jobName].label
     end
 
@@ -342,7 +260,6 @@ function Multicharacter:RegistrationComplete(src, data)
   local charId = self.awaitingRegistration[src]
   local charPrefix = ("%s%s"):format(Server.prefix, charId)
   self.awaitingRegistration[src] = nil
-
   ESX.Players[ESX.GetIdentifier(src)] = charPrefix
   routeToPublic(src)
   TriggerEvent("esx:onPlayerJoined", src, charPrefix, data)
@@ -383,22 +300,6 @@ function Server:OnConnecting(src, deferrals)
 
   if not Database.connected then
     return deferrals.done("[ESX Multicharacter] OxMySQL could not connect. Check your configuration.")
-  end
-
-  if not SetEntityOrphanMode then
-    return deferrals.done(_U('err_artifact'))
-  end
-
-  if self.oneSync == "off" or self.oneSync == "legacy" then
-      return deferrals.done(_U('err_onesync', self.oneSync))
-  end
-
-   if not Database.found then
-      return deferrals.done(_U('err_no_connstr'))
-  end
-
-   if not Database.connected then
-      return deferrals.done(_U('err_oxmysql'))
   end
 
   local ok, identifier = pcall(function() return ESX.GetIdentifier(src) end)
@@ -472,30 +373,10 @@ RegisterNetEvent("txz-multicharcater:DeleteCharacter", function(charid)
 end)
 
 RegisterNetEvent("txz-multicharcater:relog", function()
-    local src = source
-    local xPlayer = ESX.GetPlayerFromId(src)
-    if not xPlayer then return end
-
-    local group = (xPlayer.getGroup and xPlayer.getGroup()) or 'user'
-    local allowed = false
-    for _, g in ipairs(Config.Relog.groups or {}) do
-        if group == g then
-            allowed = true
-            break
-        end
-    end
-
-    TriggerEvent("esx:playerLogout", src)
+  local src = source
+  local xPlayer = ESX.GetPlayerFromId(src)
+  if not xPlayer then return end
+  TriggerEvent("esx:playerLogout", src)
 end)
-
-function Database:EnableSlot(identifier, slot)
-  local selected = ("char%s:%s"):format(slot, identifier)
-  return (MySQL.update.await("UPDATE `users` SET `disabled` = 0 WHERE identifier = ?", { selected }) or 0) > 0
-end
-
-function Database:DisableSlot(identifier, slot)
-  local selected = ("char%s:%s"):format(slot, identifier)
-  return (MySQL.update.await("UPDATE `users` SET `disabled` = 1 WHERE identifier = ?", { selected }) or 0) > 0
-end
 
 Server:ResetPlayers()

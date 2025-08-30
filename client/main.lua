@@ -1,10 +1,10 @@
+-- client.lua
 ESX = exports["es_extended"]:getSharedObject()
 local nuiReady = false
 
 CreateThread(function()
     while not ESX.PlayerLoaded do
         Wait(100)
-
         if NetworkIsPlayerActive(ESX.playerId) then
             ESX.DisableSpawnManager()
             Multicharacter:SetupCharacters()
@@ -27,9 +27,7 @@ end)
 
 ESX.SecureNetEvent('esx:onPlayerLogout', function()
     Wait(5000)
-
     Multicharacter.spawned = false
-
     Multicharacter:SetupCharacters()
     TriggerEvent("esx_skin:resetFirstSpawn")
 end)
@@ -39,16 +37,20 @@ if relog.enabled and relog.command and relog.command ~= '' then
     RegisterCommand(relog.command, function()
         if not Multicharacter.canRelog then return end
         Multicharacter.canRelog = false
-        TriggerServerEvent("txz-multicharcater:relog") 
-
-        ESX.SetTimeout(500, function()
-            Multicharacter.canRelog = true
-        end)
+        TriggerServerEvent("txz-multicharcater:relog")
+        ESX.SetTimeout(500, function() Multicharacter.canRelog = true end)
     end, false)
 end
 
 RegisterNuiCallback('nuiReady', function(_, cb)
     nuiReady = true
+    cb(1)
+end)
+
+-- NEW: let UI request creating a character in a specific (or first free) slot
+RegisterNuiCallback('createCharacter', function(data, cb)
+    local desired = data and data.slot
+    Menu:NewCharacter(desired)
     cb(1)
 end)
 
@@ -63,13 +65,11 @@ local function SetPedPosHeading(ped, x, y, z, h)
     h = (h or 0.0) % 360.0
     FreezeEntityPosition(ped, true)
     ClearPedTasksImmediately(ped)
-
     SetEntityCoordsNoOffset(ped, x, y, z, false, false, false)
     SetEntityHeading(ped, h)
     SetPedDesiredHeading(ped, h)
     Wait(250)
     SetEntityHeading(ped, h)
-
     FreezeEntityPosition(ped, false)
 end
 
@@ -107,11 +107,9 @@ local function MakeOverShoulderCam(ped, fov)
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     local px,py,pz = table.unpack(GetEntityCoords(ped))
     local fx,fy,fz = table.unpack(GetEntityForwardVector(ped))
-
     local cx = px - fx * 3.2
     local cy = py - fy * 3.2
     local cz = pz + 1.2
-
     SetCamCoord(cam, cx, cy, cz)
     PointCamAtEntity(cam, ped, 0.0, 0.9, 0.0, true)
     SetCamFov(cam, fov or 50.0)
@@ -120,6 +118,56 @@ end
 
 local function StopScriptedCams()
     RenderScriptCams(false, true, 600, true, true)
+end
+
+local function EnsureWorldReadyAt(x, y, z, radius, timeoutMs)
+    radius = radius or 80.0
+    timeoutMs = timeoutMs or 8000
+
+    local sceneStarted = false
+    if NewLoadSceneStart then
+        NewLoadSceneStart(x, y, z, x, y, z, radius, 0)
+        sceneStarted = true
+    elseif NewLoadSceneStartSphere then
+        NewLoadSceneStartSphere(x, y, z, radius, 0)
+        sceneStarted = true
+    end
+
+    local t0 = GetGameTimer()
+    if sceneStarted then
+        while not IsNewLoadSceneLoaded() and (GetGameTimer() - t0) < timeoutMs do
+            if Citizen and Citizen.InvokeNative then
+                Citizen.InvokeNative(0x43878CDAE0A92D66)
+            end
+            Wait(0)
+        end
+        NewLoadSceneStop()
+    else
+        LoadScene(x, y, z)
+        while IsNetworkLoadingScene() and (GetGameTimer() - t0) < timeoutMs do
+            Wait(0)
+        end
+    end
+
+    RequestCollisionAtCoord(x, y, z)
+    local ped = PlayerPedId()
+    local c0 = GetGameTimer()
+    while not HasCollisionLoadedAroundEntity(ped) and (GetGameTimer() - c0) < timeoutMs do
+        RequestCollisionAtCoord(x, y, z)
+        Wait(0)
+    end
+
+    SetFocusPosAndVel(x, y, z, 0.0, 0.0, 0.0)
+end
+
+local function ClearFocusIfNeeded()
+    ClearFocus()
+end
+
+local function SafeFadeIn(ms)
+    if IsScreenFadedOut() or IsScreenFadingOut() then
+        DoScreenFadeIn(ms or 400)
+    end
 end
 
 function Multicharacter:LoadSkinBase(skin)
@@ -132,7 +180,6 @@ end
 
 function Multicharacter:OpenCreationMenu(done)
     local choice = string.lower((Config.ClothingMenu or ""):gsub("%s+", ""))
-
     local function finish(saved)
         if type(done) == "function" then
             done(saved and true or false)
@@ -144,14 +191,10 @@ function Multicharacter:OpenCreationMenu(done)
             if appearance then
                 TriggerServerEvent('illenium-appearance:server:saveAppearance', appearance)
             end
+            finish(true)
         end, {
-            ped = false,
-            headBlend = true,
-            faceFeatures = true,
-            headOverlays = true,
-            components = true,
-            props = true,
-            tattoos = true 
+            ped = false, headBlend = true, faceFeatures = true, headOverlays = true,
+            components = true, props = true, tattoos = true
         })
         return
     end
@@ -160,39 +203,31 @@ function Multicharacter:OpenCreationMenu(done)
         exports["fivem-appearance"]:startPlayerCustomization(function(appearance)
             finish(appearance ~= false)
         end, {
-            ped = true,
-            headBlend = true,
-            faceFeatures = true,
-            headOverlays = true,
-            components = true,
-            props = true,
+            ped = true, headBlend = true, faceFeatures = true, headOverlays = true,
+            components = true, props = true,
         })
         return
     end
 
     if choice == "pure-clothing" and isRunning("pure-clothing") then
         exports['pure-clothing']:openMenu('createCharacter')
+        finish(true)
         return
     end
 
     if choice == "rcore-clothing" and (isRunning("rcore_clothes") or isRunning("rcore-clothes") or isRunning("rcore_clothing")) then
-        local ok, err = pcall(function()
+        local ok = pcall(function()
             if exports["rcore_clothes"] and exports["rcore_clothes"].OpenClothing then
-                exports["rcore_clothes"]:OpenClothing(function(saved, _data)
-                    finish(saved == true)
-                end)
+                exports["rcore_clothes"]:OpenClothing(function(saved) finish(saved == true) end)
             elseif exports["rcore-clothes"] and exports["rcore-clothes"].OpenClothing then
-                exports["rcore-clothes"]:OpenClothing(function(saved, _data)
-                    finish(saved == true)
-                end)
+                exports["rcore-clothes"]:OpenClothing(function(saved) finish(saved == true) end)
             else
-                TriggerEvent("rcore_clothes:openClothing", {}, function(saved, _data)
-                    finish(saved == true)
-                end)
+                TriggerEvent("rcore_clothes:openClothing", {}, function(saved) finish(saved == true) end)
             end
         end)
         if ok then return end
     end
+
     TriggerEvent("esx_skin:openSaveableMenu",
         function() finish(true) end,
         function() finish(false) end
@@ -211,8 +246,11 @@ function Multicharacter:SetupCamera()
     SetCamRot(self.cam, -50.0, 0.0, Config.Cam.w, 2)
     SetCamFov(self.cam, 75.0)
 
+    EnsureWorldReadyAt(Config.Cam.x, Config.Cam.y, Config.Cam.z, 80.0, 8000)
+
     SetCamActive(self.cam, true)
     RenderScriptCams(true, false, 1, true, true)
+    SafeFadeIn(400)
 end
 
 function Multicharacter:DestoryCamera()
@@ -224,7 +262,6 @@ function Multicharacter:DestoryCamera()
 end
 
 local HiddenCompents = {}
-
 local function HideComponents(hide)
     local components = {11, 12, 21}
     for i = 1, #components do
@@ -237,7 +274,7 @@ local function HideComponents(hide)
         else
             if HiddenCompents[components[i]] then
                 local size = HiddenCompents[components[i]]
-                SetHudComponentSize(components[i], size.x, size.z)
+                SetHudComponentSize(components[i], size.x, size.y)
                 HiddenCompents[components[i]] = nil
             end
         end
@@ -247,8 +284,9 @@ end
 
 function Multicharacter:HideHud(hide)
     self.hidePlayers = true
-
-    MumbleSetVolumeOverride(ESX.PlayerId, 0.0)
+    if MumbleSetVolumeOverride then
+        MumbleSetVolumeOverride(ESX.PlayerId, hide and 0.0 or -1.0)
+    end
     HideComponents(hide)
 end
 
@@ -264,12 +302,15 @@ function Multicharacter:SetupCharacters()
     SetPedPosHeading(self.playerPed, self.spawnCoords.x, self.spawnCoords.y, self.spawnCoords.z, self.spawnCoords.w)
     HidePedCompletely(self.playerPed)
 
+    EnsureWorldReadyAt(self.spawnCoords.x, self.spawnCoords.y, self.spawnCoords.z, 80.0, 8000)
+
     SetPlayerControl(ESX.PlayerId, false, 0)
     self:SetupCamera()
     self:HideHud(true)
 
     ShutdownLoadingScreen()
     ShutdownLoadingScreenNui()
+    SafeFadeIn(400)
     TriggerEvent("esx:loadingScreenOff")
 
     SetTimeout(200, function()
@@ -279,24 +320,14 @@ end
 
 function Multicharacter:GetSkin()
     local character = self.Characters[self.tempIndex]
-    if character and character.skin then
-        return character.skin
-    end
-
+    if character and character.skin then return character.skin end
     local sex = 0
-
     if character then
-        if character.model == `mp_f_freemode_01` then
-            sex = 1
-        elseif character.model == `mp_m_freemode_01` then
-            sex = 0
-        elseif character.sex == "female" or character.sex == "f" or character.sex == 1 then
-            sex = 1
-        else
-            sex = 0
-        end
+        if character.model == `mp_f_freemode_01` then sex = 1
+        elseif character.model == `mp_m_freemode_01` then sex = 0
+        elseif character.sex == "female" or character.sex == "f" or character.sex == 1 then sex = 1
+        else sex = 0 end
     end
-
     return { sex = sex }
 end
 
@@ -315,7 +346,6 @@ end
 
 function Multicharacter:SpawnTempPed()
     self.canRelog = false
-
     local skin = self:GetSkin()
 
     if not self.cam then
@@ -371,12 +401,7 @@ function Multicharacter:PrepForUI()
 end
 
 function Multicharacter:CloseUI()
-    SendNUIMessage({
-        action = "ToggleMulticharacter",
-        data = {
-            show = false
-        }
-    })
+    SendNUIMessage({ action = "ToggleMulticharacter", data = { show = false } })
     SetNuiFocus(false, false)
 end
 
@@ -396,6 +421,22 @@ function Multicharacter:SetupCharacter(index)
     self:PrepForUI()
 end
 
+-- helpers to manage free slots (NEW/UPDATED)
+local function IsSlotFree(idx)
+    return not Multicharacter.Characters or not Multicharacter.Characters[idx]
+end
+
+local function GetSlot(preferred)
+    local total = (Multicharacter.slots or 1)
+    local s = tonumber(preferred)
+    if s and s >= 1 and s <= total and IsSlotFree(s) then
+        return s
+    end
+    for i = 1, total do
+        if IsSlotFree(i) then return i end
+    end
+end
+
 function Multicharacter:SetupUI(characters, allowed, max)
     self.Characters = characters or {}
     self.slots = tonumber(allowed) or (Config.Slots and Config.Slots.default) or 1
@@ -405,25 +446,10 @@ function Multicharacter:SetupUI(characters, allowed, max)
         self.spawned = false
     end
 
-    SendNUIMessage({
-        action = "Locales",
-        data = GetUILocales()
-    })
+    SendNUIMessage({ action = "Locales", data = GetUILocales() })
 
-    local firstKey = next(self.Characters)
-    if not firstKey then
-        self.canRelog = false
-        local skin = { sex = 0 }
-        ESX.SpawnPlayer(skin, self.spawnCoords, function()
-            self.playerPed = PlayerPedId()
-            SetPedAoBlobRendering(self.playerPed, false)
-            SetEntityAlpha(self.playerPed, 0, false)
-            TriggerServerEvent("txz-multicharcater:CharacterChosen", 1, true)
-            TriggerEvent("esx_identity:showRegisterIdentity")
-        end)
-        return
-    end
-
+    -- IMPORTANT: Do NOT jump to identity when there are no characters.
+    -- Always open the multicharacter UI so the user can pick a slot.
     Menu:InitCharacter()
 end
 
@@ -431,26 +457,21 @@ function Multicharacter:LoadSkinCreator(skin)
     TriggerEvent("skinchanger:loadSkin", skin, function()
         SetPedAoBlobRendering(self.playerPed, true)
         ResetEntityAlpha(self.playerPed)
-
-        TriggerEvent("esx_skin:openSaveableMenu", function()
-            Multicharacter.finishedCreation = true
-        end, function()
-            Multicharacter.finishedCreation = true
-        end)
+        TriggerEvent("esx_skin:openSaveableMenu",
+            function() Multicharacter.finishedCreation = true end,
+            function() Multicharacter.finishedCreation = true end
+        )
     end)
 end
 
 function Multicharacter:SetDefaultSkin(playerData)
     local sex  = playerData.sex == "m" and 0 or 1
     local model = sex == 0 and `mp_m_freemode_01` or `mp_f_freemode_01`
-
     model = ESX.Streaming.RequestModel(model)
     if not model then return end
-
     SetPlayerModel(ESX.playerId, model)
     SetModelAsNoLongerNeeded(model)
     self.playerPed = PlayerPedId()
-
     self:LoadSkinBase({ sex = sex })
 end
 
@@ -460,35 +481,111 @@ function Multicharacter:Reset()
     self.playerPed = PlayerPedId()
     self.hidePlayers = false
     self.slots = nil
+    SetTimeout(10000, function() self.canRelog = true end)
+end
 
-    SetTimeout(10000, function()
-        self.canRelog = true
+Menu = {}
+
+function Menu:CheckModel(character)
+    if not character.model and character.skin then
+        if character.skin.model then
+            character.model = character.skin.model
+        elseif character.skin.sex == 1 then
+            character.model = `mp_f_freemode_01`
+        else
+            character.model = `mp_m_freemode_01`
+        end
+    end
+end
+
+function Menu:NewCharacter(slotChoice)
+    local slot = GetSlot(slotChoice)
+    if not slot then
+        -- No free slot; just close UI (should not happen when AllowedSlot is correct)
+        Multicharacter:CloseUI()
+        return
+    end
+
+    -- Mark the chosen slot for registration and open identity UI
+    TriggerServerEvent("txz-multicharcater:CharacterChosen", slot, true)
+    TriggerEvent("esx_identity:showRegisterIdentity")
+
+    local playerPed = PlayerPedId()
+    SetPedAoBlobRendering(playerPed, false)
+    SetEntityAlpha(playerPed, 0, false)
+    Multicharacter:CloseUI()
+end
+
+function Menu:InitCharacter()
+    local Characters = Multicharacter.Characters or {}
+    local firstKey = next(Characters)
+
+    -- Only prepare a preview ped if at least one character exists.
+    if firstKey then
+        self:CheckModel(Characters[firstKey])
+        if not Multicharacter.spawned then
+            Multicharacter:SetupCharacter(firstKey)
+        end
+        Wait(500)
+    end
+
+    SendNUIMessage({
+        action = "ToggleMulticharacter",
+        data = {
+            show = true,
+            Characters = Characters,
+            CanDelete  = Config.CanDelete,
+            AllowedSlot= Multicharacter.slots,
+            MaxSlot    = Multicharacter.slotsMax,
+        }
+    })
+
+    SetNuiFocus(true, true)
+end
+
+function Menu:SelectCharacter(index)
+    Multicharacter:SetupCharacter(index)
+end
+
+function Menu:PlayCharacter()
+    Multicharacter:CloseUI()
+    TriggerServerEvent("txz-multicharcater:CharacterChosen", Multicharacter.spawned, false)
+end
+
+function Menu:DeleteCharacter()
+    if not Config.CanDelete then return end
+    local slot = Multicharacter.spawned
+    if not slot or type(slot) ~= "number" then return end
+    if not Multicharacter.Characters or not Multicharacter.Characters[slot] then return end
+    if self._deleting then return end
+    self._deleting = true
+
+    TriggerServerEvent("txz-multicharcater:DeleteCharacter", slot)
+    Multicharacter.Characters[slot] = nil
+    Multicharacter.spawned = false
+    Menu:InitCharacter()
+
+    ESX.SetTimeout(400, function()
+        TriggerServerEvent("txz-multicharcater:SetupCharacters")
+        self._deleting = false
     end)
 end
 
 function Multicharacter:PlayerLoaded(playerData, isNew, skin)
-    -- Pick spawn location
     local spawn
     if isNew then
-        -- NEW character -> force Config.PlayerSpawn
-        spawn = self.spawnCoords  -- comes from Config.PlayerSpawn
+        spawn = self.spawnCoords
     elseif playerData and playerData.coords then
-        -- Existing character -> last saved coords
         spawn = playerData.coords
     else
-        -- Fallback to random default ESX spawn
         local esxSpawns = ESX.GetConfig().DefaultSpawns
         spawn = esxSpawns[math.random(1, #esxSpawns)]
     end
 
     local needsCreation = false
-
     if isNew or not skin or #skin == 1 then
-        -- Prepare a base model/skin only; no menu yet
         needsCreation = true
         self:SetDefaultSkin(playerData)
-        -- If you need current skin object for later, you can do:
-        -- skin = exports["skinchanger"]:GetSkin()
     else
         TriggerEvent("skinchanger:loadSkin", skin or self.Characters[self.spawned].skin)
     end
@@ -521,7 +618,6 @@ function Multicharacter:PlayerLoaded(playerData, isNew, skin)
             local startTime = GetGameTimer()
             local startFov, endFov = 75.0, 45.0
             SetCamFov(self.cam, startFov)
-
             while GetGameTimer() - startTime < duration do
                 local alpha = (GetGameTimer() - startTime) / duration
                 SetCamFov(camTo, startFov + (endFov - startFov) * alpha)
@@ -531,11 +627,11 @@ function Multicharacter:PlayerLoaded(playerData, isNew, skin)
 
         ESX.SetTimeout(duration + 100, function()
             local function finishUp()
-                StopScriptCams()
-                if self.cam then
-                    DestroyCam(self.cam, false); self.cam = nil
-                end
+                StopScriptedCams()
+                if self.cam then DestroyCam(self.cam, false); self.cam = nil end
                 if camTo then DestroyCam(camTo, false) end
+
+                ClearFocusIfNeeded()
 
                 TriggerServerEvent("esx:onPlayerSpawn")
                 TriggerEvent("esx:onPlayerSpawn")
@@ -549,100 +645,10 @@ function Multicharacter:PlayerLoaded(playerData, isNew, skin)
             end
 
             self.finishedCreation = false
-            self:OpenCreationMenu(function(saved)
+            self:OpenCreationMenu(function()
                 self.finishedCreation = true
                 finishUp()
             end)
         end)
-    end)
-end
-
-Menu = {}
-
-function Menu:CheckModel(character)
-    if not character.model and character.skin then
-        if character.skin.model then
-            character.model = character.skin.model
-        elseif character.skin.sex == 1 then
-            character.model = `mp_f_freemode_01`
-        else
-            character.model = `mp_m_freemode_01`
-        end
-    end
-end
-
-local GetSlot = function()
-    for i = 1, Multicharacter.slots do
-        if not Multicharacter.Characters[i] then
-            return i
-        end
-    end
-end
-
-function Menu:NewCharacter()
-    local slot = GetSlot()
-
-    TriggerServerEvent("txz-multicharcater:CharacterChosen", slot, true)
-    TriggerEvent("esx_identity:showRegisterIdentity")
-
-    local playerPed = PlayerPedId()
-
-    SetPedAoBlobRendering(playerPed, false)
-    SetEntityAlpha(playerPed, 0, false)
-
-    Multicharacter:CloseUI()
-end
-
-
-function Menu:InitCharacter()
-    local Characters = Multicharacter.Characters
-    local Character = next(Characters)
-    self:CheckModel(Characters[Character])
-
-    if not Multicharacter.spawned then
-        Multicharacter:SetupCharacter(Character)
-    end
-    Wait(500)
-    
-    SendNUIMessage({
-        action = "ToggleMulticharacter",
-        data = {
-            show = true,
-            Characters = Characters,
-            CanDelete  = Config.CanDelete,
-            AllowedSlot= Multicharacter.slots,
-            MaxSlot = Multicharacter.slotsMax,
-        }
-    })
-
-    SetNuiFocus(true, true)
-end
-
-function Menu:SelectCharacter(index)
-    Multicharacter:SetupCharacter(index)
-end
-
-function Menu:PlayCharacter()
-    Multicharacter:CloseUI()
-    TriggerServerEvent("txz-multicharcater:CharacterChosen", Multicharacter.spawned, false)
-end
-
-function Menu:DeleteCharacter()
-    if not Config.CanDelete then return end
-    local slot = Multicharacter.spawned
-    if not slot or type(slot) ~= "number" then return end
-    if not Multicharacter.Characters or not Multicharacter.Characters[slot] then return end
-    if self._deleting then return end
-    self._deleting = true
-
-    TriggerServerEvent("txz-multicharcater:DeleteCharacter", slot)
-
-    Multicharacter.Characters[slot] = nil
-    Multicharacter.spawned = false
-    Menu:InitCharacter()
-
-    ESX.SetTimeout(400, function()
-        TriggerServerEvent("txz-multicharcater:SetupCharacters")
-        self._deleting = false
     end)
 end
